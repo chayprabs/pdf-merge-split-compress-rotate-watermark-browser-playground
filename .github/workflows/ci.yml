@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build WASM
+        run: |
+          cd wasm/pdfcpu
+          go mod download
+          GOOS=js GOARCH=wasm go build -o ../../public/engine-pdfcpu.wasm .
+
+      - name: Fetch wasm_exec.js (Go 1.24+ safe)
+        run: |
+          curl -sL https://raw.githubusercontent.com/golang/go/refs/heads/master/lib/wasm/wasm_exec.js -o public/wasm_exec.js
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js app
+        run: npm run build
+
+      - name: Start static server
+        run: |
+          node scripts/serve-static.cjs &
+          sleep 3
+
+      - name: Run Playwright tests
+        run: |
+          npx playwright test --reporter=list
+        env:
+          CI: true
+
+      - name: Stop server
+        if: always()
+        run: pkill -f "serve-static.cjs" || true
