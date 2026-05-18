@@ -1,17 +1,105 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useRef, useState, useCallback } from "react";
+import type { FileAcceptance } from "@/lib/fileUtils";
+import { validatePdfFile, wouldExceedTotal, MSG } from "@/lib/fileUtils";
+
+export interface StagedFile {
+  id: string;
+  file: File;
+  error?: string;
+  warn?: string;
+}
 
 interface DropZoneProps {
-  onFiles: (files: File[]) => void;
-  accept?: string;
+  items: StagedFile[];
+  onItemsChange: (items: StagedFile[]) => void;
   multiple?: boolean;
 }
 
-export function DropZone({ onFiles, accept = "application/pdf", multiple = true }: DropZoneProps) {
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+export function DropZone({
+  items,
+  onItemsChange,
+  multiple = true,
+}: DropZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
-  const [files, setFiles] = useState<File[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const acceptList = useCallback(
+    (incoming: FileList | File[]) => {
+      const list = Array.from(incoming);
+
+      if (!multiple) {
+        const batch: StagedFile[] = [];
+        for (const file of list) {
+          const v = validatePdfFile(file);
+          if (!v.ok || !v.file) {
+            batch.push({
+              id: makeId(),
+              file,
+              error: v.error ?? MSG.wrongType,
+            });
+            continue;
+          }
+          if (wouldExceedTotal([], [v.file])) {
+            batch.push({
+              id: makeId(),
+              file: v.file,
+              error: MSG.totalTooLarge,
+            });
+            continue;
+          }
+          batch.push({
+            id: makeId(),
+            file: v.file,
+            warn: v.warn,
+          });
+        }
+        const valids = batch.filter((b) => !b.error);
+        const invalids = batch.filter((b) => b.error);
+        const one = valids.length ? [valids[valids.length - 1]] : [];
+        onItemsChange([...invalids, ...one]);
+        return;
+      }
+
+      const currentFiles = items.filter((i) => !i.error).map((i) => i.file);
+      const next: StagedFile[] = [...items];
+      const rejected: StagedFile[] = [];
+
+      for (const file of list) {
+        const v: FileAcceptance = validatePdfFile(file);
+        if (!v.ok || !v.file) {
+          rejected.push({
+            id: makeId(),
+            file,
+            error: v.error ?? MSG.wrongType,
+          });
+          continue;
+        }
+        if (wouldExceedTotal(currentFiles, [v.file])) {
+          rejected.push({
+            id: makeId(),
+            file: v.file,
+            error: MSG.totalTooLarge,
+          });
+          continue;
+        }
+        currentFiles.push(v.file);
+        next.push({
+          id: makeId(),
+          file: v.file,
+          warn: v.warn,
+        });
+      }
+
+      onItemsChange([...next, ...rejected]);
+    },
+    [items, multiple, onItemsChange],
+  );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -23,140 +111,54 @@ export function DropZone({ onFiles, accept = "application/pdf", multiple = true 
     setIsDragging(false);
   }, []);
 
-  const validateFiles = useCallback((fileList: FileList | File[]): File[] => {
-    const validFiles: File[] = [];
-    const items = Array.from(fileList);
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      if (e.dataTransfer.files.length) acceptList(e.dataTransfer.files);
+    },
+    [acceptList],
+  );
 
-    for (const file of items) {
-      if (file.type === accept) {
-        validFiles.push(file);
-      } else {
-        console.warn(`Invalid file type: ${file.name}. Expected ${accept}`);
-      }
-    }
+  const handleClick = useCallback(() => inputRef.current?.click(), []);
 
-    return validFiles;
-  }, [accept]);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-
-    const validFiles = validateFiles(e.dataTransfer.files);
-    if (validFiles.length > 0) {
-      const newFiles = multiple ? [...files, ...validFiles] : validFiles;
-      setFiles(newFiles);
-      onFiles(newFiles);
-    }
-  }, [files, multiple, onFiles, validateFiles]);
-
-  const handleClick = useCallback(() => {
-    inputRef.current?.click();
-  }, []);
-
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const validFiles = validateFiles(e.target.files);
-      if (validFiles.length > 0) {
-        const newFiles = multiple ? [...files, ...validFiles] : validFiles;
-        setFiles(newFiles);
-        onFiles(newFiles);
-      }
-    }
-  }, [files, multiple, onFiles, validateFiles]);
-
-  const removeFile = useCallback((index: number) => {
-    const newFiles = files.filter((_, i) => i !== index);
-    setFiles(newFiles);
-    onFiles(newFiles);
-  }, [files, onFiles]);
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-  };
+  const handleFileSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files?.length) acceptList(e.target.files);
+      e.target.value = "";
+    },
+    [acceptList],
+  );
 
   return (
     <div>
-      <div
+      <button
+        type="button"
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={handleClick}
-        style={{
-          border: isDragging ? "2px dashed #3b82f6" : "2px dashed #d1d5db",
-          borderRadius: "0.5rem",
-          padding: "2rem",
-          textAlign: "center",
-          cursor: "pointer",
-          backgroundColor: isDragging ? "#eff6ff" : "white",
-          transition: "all 0.2s",
-        }}
+        className={`w-full rounded-lg border-2 border-dashed p-8 text-center transition-colors cursor-pointer ${
+          isDragging
+            ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30"
+            : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/50"
+        }`}
       >
         <input
           ref={inputRef}
           type="file"
-          accept={accept}
+          accept="application/pdf,.pdf"
           multiple={multiple}
+          className="hidden"
           onChange={handleFileSelect}
-          style={{ display: "none" }}
         />
-        <p style={{ color: "#6b7280" }}>
-          {isDragging ? "Drop PDF files here" : "Drag and drop PDF files or click to browse"}
+        <p className="text-gray-600 dark:text-gray-400">
+          {isDragging
+            ? "Drop PDF files here"
+            : "Drag and drop PDF files or click to browse"}
         </p>
-        <p style={{ color: "#9ca3af", fontSize: "0.875rem", marginTop: "0.5rem" }}>
-          {accept === "application/pdf" ? "PDF files only" : accept}
-        </p>
-      </div>
-
-      {files.length > 0 && (
-        <div style={{ marginTop: "1rem" }}>
-          <h3 style={{ fontSize: "0.875rem", fontWeight: "600", marginBottom: "0.5rem" }}>
-            Selected Files ({files.length})
-          </h3>
-          <ul style={{ listStyle: "none", padding: 0 }}>
-            {files.map((file, index) => (
-              <li
-                key={index}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "0.5rem",
-                  border: "1px solid #e5e7eb",
-                  borderRadius: "0.25rem",
-                  marginBottom: "0.25rem",
-                }}
-              >
-                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {file.name}
-                </span>
-                <span style={{ color: "#6b7280", fontSize: "0.875rem", margin: "0 1rem" }}>
-                  {formatFileSize(file.size)}
-                </span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeFile(index);
-                  }}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "#ef4444",
-                    cursor: "pointer",
-                    fontSize: "1.25rem",
-                    lineHeight: 1,
-                  }}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+        <p className="text-sm text-gray-400 mt-2">PDF files only</p>
+      </button>
     </div>
   );
 }

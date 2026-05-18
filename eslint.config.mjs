@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "public/wasm_exec.js",
+    "public/pdf-worker.js",
+    "public/engine-pdfcpu.wasm",
+    "scripts/**",
   ]),
 ]);
 

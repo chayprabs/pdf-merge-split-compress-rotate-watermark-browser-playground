@@ -5,28 +5,37 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:wasm": "cd wasm/pdfcpu && GOOS=js GOARCH=wasm go build -o ../../public/engine-pdfcpu.wasm .",
+    "build:all": "bash scripts/build-wasm.sh && next build",
     "start": "next start",
     "lint": "eslint",
-    "serve:static": "node scripts/serve-static.cjs",
-    "build:wasm": "cd wasm/pdfcpu && GOOS=js GOARCH=wasm go build -o ../../public/engine-pdfcpu.wasm ."
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "serve:static": "node scripts/serve-static.cjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "fflate": "^0.8.2",
+    "lz-string": "^1.5.0",
     "next": "16.2.2",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@tailwindcss/postcss": "^4",
+    "@types/lz-string": "^1.3.34",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.2",
+    "license-checker": "^25.0.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.6"
   }
 }

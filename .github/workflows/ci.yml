@@ -17,35 +17,42 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: "1.24"
 
-      - name: Build WASM
-        run: |
-          cd wasm/pdfcpu
-          go mod download
-          GOOS=js GOARCH=wasm go build -o ../../public/engine-pdfcpu.wasm .
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
 
-      - name: Fetch wasm_exec.js (Go 1.24+ safe)
-        run: |
-          curl -sL https://raw.githubusercontent.com/golang/go/refs/heads/master/lib/wasm/wasm_exec.js -o public/wasm_exec.js
+      - name: Build WASM engine
+        run: bash scripts/build-wasm.sh
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Next.js app
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: License check
+        run: npx license-checker --production --failOn GPL,AGPL,LGPL
+
+      - name: npm audit
+        run: npm audit --audit-level=high
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Next.js build
         run: npm run build
 
-      - name: Start static server
-        run: |
-          node scripts/serve-static.cjs &
-          sleep 3
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
 
-      - name: Run Playwright tests
-        run: |
-          npx playwright test --reporter=list
+      - name: E2E tests
+        run: npm run test:e2e
         env:
           CI: true
-
-      - name: Stop server
-        if: always()
-        run: pkill -f "serve-static.cjs" || true

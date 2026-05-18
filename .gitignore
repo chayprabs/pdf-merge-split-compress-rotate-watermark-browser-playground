@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/test-results/
+/playwright-report/
 
 # next.js
 /.next/
@@ -39,3 +41,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# PRD / product docs (do not commit)
+pdf-merge-split-compress-rotate-watermark-browser-playground.pdf
+
+# WASM build outputs (rebuilt in CI)
+public/engine-pdfcpu.wasm
+public/wasm_exec.js

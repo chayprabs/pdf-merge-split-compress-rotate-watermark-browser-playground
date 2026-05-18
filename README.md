@@ -1,37 +1,55 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Press
 
-## Getting Started
+Browser-based PDF workspace: **merge**, **split**, **compress**, **rotate**, and **watermark** — fully client-side using [pdfcpu](https://github.com/pdfcpu/pdfcpu) compiled to WebAssembly. No file data is sent to a server.
 
-First, run the development server:
+## Requirements
+
+- Node.js 20+
+- Go 1.21+ (for building the WASM engine; CI uses 1.24 to match `wasm/pdfcpu`)
+
+## Develop
 
 ```bash
+# Build WASM + copy wasm_exec.js from your Go toolchain
+bash scripts/build-wasm.sh
+
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Production static build
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+bash scripts/build-wasm.sh
+npm ci
+npm run build
+```
 
-## Learn More
+Output: `out/`. Test locally with correct COOP/COEP + MIME types:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run serve:static
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Then open [http://localhost:3001](http://localhost:3001).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Tests
 
-## Deploy on Vercel
+```bash
+npm test              # Vitest (unit)
+npm run test:e2e      # Playwright (needs `out/` from `npm run build`)
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Security headers
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-"# pdf-merge-split-compress-rotate-watermark-browser-playground" 
+With `output: 'export'`, Next.js does not emit custom `headers()`. Use [`public/_headers`](public/_headers) on **Cloudflare Pages** (or your host’s equivalent). Local `serve-static` applies the same policies for smoke testing.
+
+## CI
+
+GitHub Actions builds WASM, runs TypeScript check, ESLint, license-checker, `npm audit`, unit tests, `next build`, and Playwright against `out/`.
+
+## License
+
+MIT — see [LICENSE](LICENSE). pdfcpu is Apache 2.0 — see [NOTICE](NOTICE) and [/credits](/credits).
