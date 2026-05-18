@@ -98,12 +98,19 @@ func parsePages(pageStr string) []string {
 	return pages
 }
 
+func jsIsArray(v js.Value) bool {
+	if v.Type() != js.TypeObject {
+		return false
+	}
+	return js.Global().Get("Array").Call("isArray", v).Bool()
+}
+
 func pdfcpuMerge(this js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return map[string]any{"ok": false, "error": "merge requires array of PDF bytes as first argument"}
 	}
 
-	if args[0].Type() != 2 {
+	if !jsIsArray(args[0]) {
 		return map[string]any{"ok": false, "error": "first argument must be an array of PDF Uint8Arrays"}
 	}
 
@@ -595,7 +602,9 @@ func main() {
 	js.Global().Set("pdfcpuAddWatermark", js.FuncOf(pdfcpuAddWatermark))
 	js.Global().Set("pdfcpuRemovePages", js.FuncOf(pdfcpuRemovePages))
 	js.Global().Set("pdfcpuSetMetadata", js.FuncOf(pdfcpuSetMetadata))
-	js.Global().Set("pdfcpuVersion", map[string]string{"version": "0.11.1"})
+	versionObj := js.Global().Get("Object").New()
+	versionObj.Set("version", "0.11.1")
+	js.Global().Set("pdfcpuVersion", versionObj)
 
 	<-make(chan struct{})
 }

@@ -24,3 +24,30 @@ export function isValidPageRangeSyntax(s: string): boolean {
   }
   return true;
 }
+
+/** Highest page number referenced in a range string (1-based). */
+export function maxPageInRange(s: string): number | null {
+  if (!isValidPageRangeSyntax(s)) return null;
+  let max = 0;
+  for (const part of s.split(",").map((p) => p.trim()).filter(Boolean)) {
+    const single = /^(\d+)$/u.exec(part);
+    if (single) {
+      max = Math.max(max, parseInt(single[1], 10));
+      continue;
+    }
+    const range = /^(\d+)-(\d+)$/u.exec(part);
+    if (range) {
+      max = Math.max(max, parseInt(range[1], 10), parseInt(range[2], 10));
+    }
+  }
+  return max > 0 ? max : null;
+}
+
+export function pageRangeExceedsDocument(
+  range: string,
+  pageCount: number,
+): boolean {
+  const max = maxPageInRange(range);
+  if (max === null) return false;
+  return max > pageCount;
+}

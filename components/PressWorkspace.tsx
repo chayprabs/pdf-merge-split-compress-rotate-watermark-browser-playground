@@ -30,7 +30,10 @@ import {
   buildZip,
   triggerDownload,
 } from "@/lib/engine";
-import { isValidPageRangeSyntax } from "@/lib/pageRange";
+import {
+  isValidPageRangeSyntax,
+  pageRangeExceedsDocument,
+} from "@/lib/pageRange";
 import type { OperationId, ShareableState } from "@/lib/shareState";
 import {
   encodeState,
@@ -54,6 +57,12 @@ function fmtSize(bytes: number): string {
 function truncName(name: string, max = 40): string {
   if (name.length <= max) return name;
   return `${name.slice(0, max - 1)}…`;
+}
+
+interface PendingDownload {
+  data: Uint8Array;
+  mime: string;
+  filename: string;
 }
 
 export function PressWorkspace() {
@@ -86,6 +95,8 @@ export function PressWorkspace() {
   const [outMsg, setOutMsg] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [shareToast, setShareToast] = useState(false);
+  const [pendingDownload, setPendingDownload] =
+    useState<PendingDownload | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const valids = useMemo(() => rows.filter((r) => !r.error), [rows]);
@@ -136,28 +147,32 @@ export function PressWorkspace() {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      for (const r of rows) {
-        if (r.error || cancelled) continue;
-        if (r.pageCount !== undefined) continue;
-        const id = r.id;
-        try {
-          const buf = await readFileArrayBuffer(r.file);
-          const n = await pageCountPdf(buf);
-          if (cancelled) return;
-          setRows((prev) =>
-            prev.map((x) => (x.id === id ? { ...x, pageCount: n } : x)),
-          );
-        } catch {
-          if (cancelled) return;
-          setRows((prev) =>
-            prev.map((x) => (x.id === id ? { ...x, pageCount: -1 } : x)),
-          );
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        await getWasmBridge().ensureReady();
+        for (const r of rows) {
+          if (r.error || cancelled) continue;
+          if (r.pageCount !== undefined) continue;
+          const id = r.id;
+          try {
+            const buf = await readFileArrayBuffer(r.file);
+            const n = await pageCountPdf(buf);
+            if (cancelled) return;
+            setRows((prev) =>
+              prev.map((x) => (x.id === id ? { ...x, pageCount: n } : x)),
+            );
+          } catch {
+            if (cancelled) return;
+            setRows((prev) =>
+              prev.map((x) => (x.id === id ? { ...x, pageCount: -1 } : x)),
+            );
+          }
         }
-      }
-    })();
+      })();
+    }, 300);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [rows]);
 
@@ -232,9 +247,8 @@ export function PressWorkspace() {
       if (splitMode === "range") {
         if (!splitRange.trim()) return MSG.splitRangeInvalid;
         if (!isValidPageRangeSyntax(splitRange)) return MSG.splitRangeInvalid;
-        if (typeof pc === "number" && pc > 0) {
-          /* wasm will validate ranges */
-        }
+        if (typeof pc === "number" && pc > 0 && pageRangeExceedsDocument(splitRange, pc))
+          return MSG.splitRangeExceeds(pc);
       } else {
         if (splitEvery < 1) return MSG.splitNInvalid;
         if (typeof pc === "number" && pc > 0 && splitEvery >= pc)
@@ -244,6 +258,9 @@ export function PressWorkspace() {
     if (op === "rotate" && !rotAll) {
       if (!rotPages.trim() || !isValidPageRangeSyntax(rotPages))
         return MSG.splitRangeInvalid;
+      const pc = valids[0]?.pageCount;
+      if (typeof pc === "number" && pc > 0 && pageRangeExceedsDocument(rotPages, pc))
+        return MSG.splitRangeExceeds(pc);
     }
     if (op === "watermark") {
       if (!wmText.trim()) return MSG.wmEmpty;
@@ -290,9 +307,53 @@ export function PressWorkspace() {
     setBadge("ready");
   };
 
+  const selectOperation = (id: OperationId) => {
+    switch (id) {
+      case "merge":
+        setMergeOut("merged.pdf");
+        break;
+      case "split":
+        setSplitMode("range");
+        setSplitRange("");
+        setSplitEvery(1);
+        break;
+      case "compress":
+        setCompressQ("medium");
+        break;
+      case "rotate":
+        setRotAngle(90);
+        setRotAll(true);
+        setRotPages("");
+        break;
+      case "watermark":
+        setWmText("CONFIDENTIAL");
+        setWmPos("center");
+        setWmOpacity(30);
+        setWmSize(48);
+        setWmColor("#808080");
+        setWmRot(45);
+        break;
+    }
+    setOp(id);
+    setOutPhase("idle");
+    setOutMsg("");
+    setPendingDownload(null);
+  };
+
   const onRun = async () => {
+    if (badge === "loading") {
+      setOutPhase("error");
+      setOutMsg(PRD.engineLoading);
+      return;
+    }
+    if (badge !== "ready") {
+      setOutPhase("error");
+      setOutMsg(PRD.engineRestarted);
+      return;
+    }
     if (!canRun || validationError) return;
     const bridge = getWasmBridge();
+    setPendingDownload(null);
     startProcessing();
     try {
       if (op === "merge") {
@@ -301,17 +362,18 @@ export function PressWorkspace() {
         );
         const res = await bridge.run(
           "merge",
-          buffers,
+          buffers.map((b) => b.slice(0)),
           { configJson: JSON.stringify({ dividerPage: false }) },
-          { transfer: true },
+          { transfer: false },
         );
         if (!res.buffer) throw new PdfEngineError(PRD.genericWasm);
-        triggerDownload(
-          new Uint8Array(res.buffer),
-          "application/pdf",
-          sanitizeFilename(mergeOut || "merged.pdf"),
-        );
+        const filename = sanitizeFilename(mergeOut || "merged.pdf");
         const mb = (res.buffer.byteLength / (1024 * 1024)).toFixed(1);
+        setPendingDownload({
+          data: new Uint8Array(res.buffer),
+          mime: "application/pdf",
+          filename,
+        });
         setOutPhase("success");
         setOutMsg(`Merged ${valids.length} files · ${mb} MB`);
       } else if (op === "split") {
@@ -324,18 +386,22 @@ export function PressWorkspace() {
         const parts = res.buffers || [];
         const meta = res.splitMeta || [];
         if (parts.length === 1) {
-          triggerDownload(
-            new Uint8Array(parts[0]),
-            "application/pdf",
-            "split-1.pdf",
-          );
+          setPendingDownload({
+            data: new Uint8Array(parts[0]),
+            mime: "application/pdf",
+            filename: "split-1.pdf",
+          });
         } else {
           const entries = parts.map((b, i) => ({
             name: `split-${meta[i]?.from ?? i + 1}-${meta[i]?.thru ?? i + 1}.pdf`,
             data: new Uint8Array(b),
           }));
           const zip = buildZip(entries);
-          triggerDownload(zip, "application/zip", "split-output.zip");
+          setPendingDownload({
+            data: zip,
+            mime: "application/zip",
+            filename: "split-output.zip",
+          });
         }
         setOutPhase("success");
         setOutMsg(`Split into ${parts.length} file(s)`);
@@ -345,25 +411,25 @@ export function PressWorkspace() {
         );
         const res = await bridge.run(
           "optimize",
-          buffers,
+          buffers.map((b) => b.slice(0)),
           { quality: compressQ },
-          { transfer: true },
+          { transfer: false },
         );
         const outs = res.buffers || [];
         if (outs.length === 1) {
           const orig = valids[0].file.size;
           const comp = outs[0].byteLength;
           const pct = orig > 0 ? Math.round(((orig - comp) / orig) * 100) : 0;
-          triggerDownload(
-            new Uint8Array(outs[0]),
-            "application/pdf",
-            "compressed.pdf",
-          );
+          setPendingDownload({
+            data: new Uint8Array(outs[0]),
+            mime: "application/pdf",
+            filename: "compressed.pdf",
+          });
           setOutPhase("success");
           setOutMsg(
             pct > 0
-              ? `Compressed · ${fmtSize(comp)} · ${pct}% smaller`
-              : `Compressed · ${fmtSize(comp)}`,
+              ? `Compressed to ${fmtSize(comp)} (${pct}% smaller than ${fmtSize(orig)})`
+              : `Compressed to ${fmtSize(comp)} (size unchanged)`,
           );
         } else {
           const entries = outs.map((b, i) => ({
@@ -373,9 +439,13 @@ export function PressWorkspace() {
             data: new Uint8Array(b),
           }));
           const zip = buildZip(entries);
-          triggerDownload(zip, "application/zip", "compressed.zip");
+          setPendingDownload({
+            data: zip,
+            mime: "application/zip",
+            filename: "compressed.zip",
+          });
           setOutPhase("success");
-          setOutMsg(`Compressed ${outs.length} files`);
+          setOutMsg(`Compressed ${outs.length} files — download zip`);
         }
       } else if (op === "rotate") {
         const buf = await readFileArrayBuffer(valids[0].file);
@@ -385,13 +455,13 @@ export function PressWorkspace() {
         });
         const res = await bridge.run("rotate", [buf], { configJson: cfg });
         if (!res.buffer) throw new PdfEngineError(PRD.genericWasm);
-        triggerDownload(
-          new Uint8Array(res.buffer),
-          "application/pdf",
-          "rotated.pdf",
-        );
+        setPendingDownload({
+          data: new Uint8Array(res.buffer),
+          mime: "application/pdf",
+          filename: "rotated.pdf",
+        });
         setOutPhase("success");
-        setOutMsg("Rotated PDF ready to download");
+        setOutMsg("Rotated PDF ready");
       } else if (op === "watermark") {
         const buf = await readFileArrayBuffer(valids[0].file);
         const cfg = JSON.stringify({
@@ -405,13 +475,13 @@ export function PressWorkspace() {
         });
         const res = await bridge.run("watermark", [buf], { configJson: cfg });
         if (!res.buffer) throw new PdfEngineError(PRD.genericWasm);
-        triggerDownload(
-          new Uint8Array(res.buffer),
-          "application/pdf",
-          "watermarked.pdf",
-        );
+        setPendingDownload({
+          data: new Uint8Array(res.buffer),
+          mime: "application/pdf",
+          filename: "watermarked.pdf",
+        });
         setOutPhase("success");
-        setOutMsg("Watermarked PDF ready to download");
+        setOutMsg("Watermarked PDF ready");
       }
       stopProcessing();
     } catch (e) {
@@ -554,11 +624,7 @@ export function PressWorkspace() {
               type="button"
               title={tabDisabled(id) ? "Requires exactly 1 file" : undefined}
               disabled={false}
-              onClick={() => {
-                setOp(id);
-                setOutPhase("idle");
-                setOutMsg("");
-              }}
+              onClick={() => selectOperation(id)}
               className={`px-3 py-1.5 rounded-md text-sm capitalize border ${
                 op === id
                   ? "border-blue-600 bg-blue-50 dark:bg-blue-950/50"
@@ -787,15 +853,32 @@ export function PressWorkspace() {
         {(outPhase === "success" ||
           outPhase === "error" ||
           outPhase === "timeout") && (
-          <p
-            className={`text-sm ${
-              outPhase === "success"
-                ? "text-green-800 dark:text-green-300"
-                : "text-red-700 dark:text-red-300"
-            }`}
-          >
-            {outMsg}
-          </p>
+          <div className="space-y-3">
+            <p
+              className={`text-sm ${
+                outPhase === "success"
+                  ? "text-green-800 dark:text-green-300"
+                  : "text-red-700 dark:text-red-300"
+              }`}
+            >
+              {outMsg}
+            </p>
+            {outPhase === "success" && pendingDownload && (
+              <button
+                type="button"
+                className="px-4 py-2 rounded-lg bg-green-700 text-white text-sm font-medium hover:bg-green-800"
+                onClick={() => {
+                  triggerDownload(
+                    pendingDownload.data,
+                    pendingDownload.mime,
+                    pendingDownload.filename,
+                  );
+                }}
+              >
+                Download {pendingDownload.filename}
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -863,7 +946,9 @@ function SortRow({
       </span>
 
       {row.warn && !row.error && (
-        <span className="text-xs text-amber-600">slow</span>
+        <span className="text-xs text-amber-600 max-w-[140px] truncate" title={MSG.largeWarn}>
+          {MSG.largeWarn}
+        </span>
       )}
 
       {row.error && (

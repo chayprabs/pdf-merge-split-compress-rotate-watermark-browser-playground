@@ -62,16 +62,29 @@ interface WorkerDone {
 type WorkerMsg = WorkerInitOk | WorkerInitErr | WorkerDone;
 
 function mapEngineError(raw: string): string {
-  const s = (raw || "").toLowerCase();
+  const rawMsg = raw || "";
+  const exceeds = /page range exceeds the document's (\d+) pages/i.exec(rawMsg);
+  if (exceeds) {
+    return `Page range exceeds the document's ${exceeds[1]} pages.`;
+  }
+  const s = rawMsg.toLowerCase();
   if (
     s.includes("password") ||
     s.includes("encrypt") ||
     s.includes("decrypt") ||
     s.includes("corrupt") ||
-    s.includes("validation failed")
+    s.includes("validation failed") ||
+    s.includes("invalid page")
   ) {
     return PRD.genericWasm;
   }
+  if (s.includes("invalid span") || s.includes("invalid page range")) {
+    return "Invalid page range. Use formats like 1-3, 5, 7-9.";
+  }
+  if (s.includes("go program has already exited")) {
+    return PRD.engineRestarted;
+  }
+  if (rawMsg.trim()) return rawMsg;
   return PRD.genericWasm;
 }
 
@@ -86,6 +99,7 @@ export class WasmBridge {
   private worker: Worker | null = null;
   private readyPromise: Promise<void> | null = null;
   private nextId = 1;
+  private opChain: Promise<unknown> = Promise.resolve();
   private readonly pending = new Map<
     number,
     {
@@ -184,13 +198,12 @@ export class WasmBridge {
     await this.ensureReady();
   }
 
-  async run(
+  private runOnce(
     op: WorkerOp,
     fileBuffers: ArrayBuffer[],
-    options: Record<string, unknown> = {},
-    runOpts: { transfer?: boolean } = {},
+    options: Record<string, unknown>,
+    runOpts: { transfer?: boolean },
   ): Promise<RunResult> {
-    await this.ensureReady();
     const id = this.nextId++;
     const useTransfer = runOpts.transfer !== false;
     const transfer = useTransfer ? fileBuffers.slice() : [];
@@ -233,6 +246,22 @@ export class WasmBridge {
         this.worker!.postMessage(msg);
       }
     });
+  }
+
+  async run(
+    op: WorkerOp,
+    fileBuffers: ArrayBuffer[],
+    options: Record<string, unknown> = {},
+    runOpts: { transfer?: boolean } = {},
+  ): Promise<RunResult> {
+    await this.ensureReady();
+    const task = () => this.runOnce(op, fileBuffers, options, runOpts);
+    const result = this.opChain.then(task, task);
+    this.opChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   /** After a crash, call to load a fresh worker. */

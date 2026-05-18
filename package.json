@@ -11,7 +11,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
+    "gen:e2e-fixtures": "node scripts/gen-e2e-fixtures.mjs",
+    "test:e2e": "node scripts/gen-e2e-fixtures.mjs && playwright test",
     "serve:static": "node scripts/serve-static.cjs"
   },
   "dependencies": {
@@ -20,7 +21,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "fflate": "^0.8.2",
     "lz-string": "^1.5.0",
-    "next": "16.2.2",
+    "next": "16.2.6",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
@@ -32,8 +33,9 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.2",
+    "eslint-config-next": "16.2.6",
     "license-checker": "^25.0.1",
+    "pdf-lib": "^1.17.1",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.6"
