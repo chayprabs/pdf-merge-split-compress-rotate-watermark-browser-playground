@@ -121,7 +121,7 @@ func pdfcpuMerge(this js.Value, args []js.Value) any {
 	}
 
 	dividerPage := false
-	if len(args) > 1 && args[1].Type() == 1 {
+	if len(args) > 1 && args[1].Type() == js.TypeString {
 		if c, err := parseJSONConfig[MergeConfig](args[1].String()); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		} else if c != nil {
@@ -181,7 +181,7 @@ func pdfcpuSplit(this js.Value, args []js.Value) any {
 
 	pagesMode := ""
 	span := 1
-	if len(args) > 1 && args[1].Type() == 1 {
+	if len(args) > 1 && args[1].Type() == js.TypeString {
 		if c, err := parseJSONConfig[SplitConfig](args[1].String()); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		} else if c != nil {
@@ -270,7 +270,7 @@ func pdfcpuRotate(this js.Value, args []js.Value) any {
 	rotation := 90
 	pages := ""
 
-	if len(args) > 1 && args[1].Type() == 1 {
+	if len(args) > 1 && args[1].Type() == js.TypeString {
 		if c, err := parseJSONConfig[RotateConfig](args[1].String()); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		} else if c != nil {
@@ -342,7 +342,7 @@ func pdfcpuOptimize(this js.Value, args []js.Value) any {
 	}
 
 	conf := defaultConf
-	if len(args) > 1 && args[1].Type() == 1 {
+	if len(args) > 1 && args[1].Type() == js.TypeString {
 		if c, err := parseJSONConfig[OptimizeConfig](args[1].String()); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		} else if c != nil && c.Quality != "" {
@@ -402,7 +402,7 @@ func pdfcpuExtractPages(this js.Value, args []js.Value) any {
 	}
 
 	pages := ""
-	if len(args) > 1 && args[1].Type() == 1 {
+	if len(args) > 1 && args[1].Type() == js.TypeString {
 		if c, err := parseJSONConfig[RemovePagesConfig](args[1].String()); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		} else if c != nil {
@@ -449,7 +449,7 @@ func pdfcpuAddWatermark(this js.Value, args []js.Value) any {
 	fontSizeWM := 48
 	colorHex := "#808080"
 
-	if len(args) > 1 && args[1].Type() == 1 {
+	if len(args) > 1 && args[1].Type() == js.TypeString {
 		if c, err := parseJSONConfig[WatermarkConfig](args[1].String()); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		} else if c != nil {
@@ -514,7 +514,7 @@ func pdfcpuRemovePages(this js.Value, args []js.Value) any {
 	}
 
 	pages := ""
-	if len(args) > 1 && args[1].Type() == 1 {
+	if len(args) > 1 && args[1].Type() == js.TypeString {
 		if c, err := parseJSONConfig[RemovePagesConfig](args[1].String()); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		} else if c != nil {
@@ -554,7 +554,7 @@ func pdfcpuSetMetadata(this js.Value, args []js.Value) any {
 
 	properties := make(map[string]string)
 
-	if len(args) > 1 && args[1].Type() == 1 {
+	if len(args) > 1 && args[1].Type() == js.TypeString {
 		if c, err := parseJSONConfig[MetadataConfig](args[1].String()); err != nil {
 			return map[string]any{"ok": false, "error": err.Error()}
 		} else if c != nil {

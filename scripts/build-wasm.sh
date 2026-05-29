@@ -4,9 +4,9 @@ echo "Building WASM with $(go version)"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT/wasm/pdfcpu"
 go mod download
+GOROOT="$(go env GOROOT)"
 GOOS=js GOARCH=wasm go build -o "$ROOT/public/engine-pdfcpu.wasm" .
 cd "$ROOT"
-GOROOT="$(go env GOROOT)"
 WASM_EXEC_JS=""
 for candidate in "$GOROOT/lib/wasm/wasm_exec.js" "$GOROOT/misc/wasm/wasm_exec.js"; do
   if [[ -f "$candidate" ]]; then

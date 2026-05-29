@@ -12,12 +12,15 @@ export function isValidPageRangeSyntax(s: string): boolean {
     .filter(Boolean);
   if (parts.length === 0) return false;
   for (const p of parts) {
-    if (/^-?\d+$/u.test(p)) continue;
+    if (/^\d+$/u.test(p)) {
+      if (parseInt(p, 10) < 1) return false;
+      continue;
+    }
     const m = /^(\d+)-(\d+)$/u.exec(p);
     if (m) {
       const a = parseInt(m[1], 10);
       const b = parseInt(m[2], 10);
-      if (a < 1 || b < 1) return false;
+      if (a < 1 || b < 1 || a > b) return false;
       continue;
     }
     return false;
