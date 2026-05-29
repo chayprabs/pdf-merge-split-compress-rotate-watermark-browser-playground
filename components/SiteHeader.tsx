@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const GITHUB_URL =
   "https://github.com/chayprabs/pdf-merge-split-compress-rotate-watermark-browser-playground";
 const TWITTER_URL = "https://x.com/chayprabs";
@@ -49,9 +51,12 @@ export function SiteHeader() {
   return (
     <header className="border-b border-neutral-200 bg-white">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
-        <a href="/" className="text-xl font-semibold tracking-tight text-neutral-900">
+        <Link
+          href="/"
+          className="text-xl font-semibold tracking-tight text-neutral-900"
+        >
           Press
-        </a>
+        </Link>
         <nav
           className="flex items-center gap-4"
           aria-label="External links"
