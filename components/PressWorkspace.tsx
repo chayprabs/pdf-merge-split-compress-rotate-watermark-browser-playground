@@ -29,6 +29,8 @@ import {
   MSG,
   buildZip,
   triggerDownload,
+  MAX_FILE_BYTES,
+  MAX_TOTAL_BYTES,
 } from "@/lib/engine";
 import {
   isValidPageRangeSyntax,
@@ -44,9 +46,22 @@ import {
 type EngineBadge = "loading" | "ready" | "processing" | "error";
 
 interface QueueRow extends StagedFile {
-  /** undefined = not loaded yet; -1 = unknown */
   pageCount?: number;
 }
+
+interface PendingDownload {
+  data: Uint8Array;
+  mime: string;
+  filename: string;
+}
+
+const OPS: { id: OperationId; label: string }[] = [
+  { id: "merge", label: "Merge" },
+  { id: "split", label: "Split" },
+  { id: "compress", label: "Compress" },
+  { id: "rotate", label: "Rotate" },
+  { id: "watermark", label: "Watermark" },
+];
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -54,15 +69,8 @@ function fmtSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function truncName(name: string, max = 40): string {
-  if (name.length <= max) return name;
-  return `${name.slice(0, max - 1)}…`;
-}
-
-interface PendingDownload {
-  data: Uint8Array;
-  mime: string;
-  filename: string;
+function truncName(name: string, max = 36): string {
+  return name.length <= max ? name : `${name.slice(0, max - 1)}…`;
 }
 
 export function PressWorkspace() {
@@ -74,9 +82,7 @@ export function PressWorkspace() {
   const [splitMode, setSplitMode] = useState<"range" | "every">("range");
   const [splitRange, setSplitRange] = useState("");
   const [splitEvery, setSplitEvery] = useState(1);
-  const [compressQ, setCompressQ] = useState<"low" | "medium" | "high">(
-    "medium",
-  );
+  const [compressQ, setCompressQ] = useState<"low" | "medium" | "high">("medium");
   const [rotAngle, setRotAngle] = useState<90 | 180 | 270>(90);
   const [rotAll, setRotAll] = useState(true);
   const [rotPages, setRotPages] = useState("");
@@ -94,10 +100,12 @@ export function PressWorkspace() {
   >("idle");
   const [outMsg, setOutMsg] = useState("");
   const [elapsed, setElapsed] = useState(0);
-  const [shareToast, setShareToast] = useState(false);
+  const [shareToast, setShareToast] = useState<string | null>(null);
   const [pendingDownload, setPendingDownload] =
     useState<PendingDownload | null>(null);
+
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const runIdRef = useRef(0);
 
   const valids = useMemo(() => rows.filter((r) => !r.error), [rows]);
 
@@ -107,6 +115,18 @@ export function PressWorkspace() {
       coordinateGetter: sortableKeyboardCoordinates,
     }),
   );
+
+  const resetOutput = useCallback(() => {
+    runIdRef.current += 1;
+    setOutPhase("idle");
+    setOutMsg("");
+    setPendingDownload(null);
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+    if (badge === "processing") setBadge("ready");
+  }, [badge]);
 
   useEffect(() => {
     const decoded = decodeStateFromHash();
@@ -130,14 +150,12 @@ export function PressWorkspace() {
 
   useEffect(() => {
     let live = true;
-    (async () => {
+    void (async () => {
       try {
         await getWasmBridge().ensureReady();
         if (live) setBadge("ready");
       } catch {
-        if (live) {
-          setBadge("error");
-        }
+        if (live) setBadge("error");
       }
     })();
     return () => {
@@ -176,6 +194,13 @@ export function PressWorkspace() {
     };
   }, [rows]);
 
+  useEffect(
+    () => () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+    },
+    [],
+  );
+
   const syncUrl = useCallback(() => {
     const state: ShareableState = {
       operation: op,
@@ -196,35 +221,27 @@ export function PressWorkspace() {
     };
     const hash = encodeState(state);
     if (hash) applyHashToLocation(hash);
-    return !!hash;
+    return hash;
   }, [
-    op,
-    mergeOut,
-    splitMode,
-    splitRange,
-    splitEvery,
-    compressQ,
-    rotAngle,
-    rotAll,
-    rotPages,
-    wmText,
-    wmPos,
-    wmOpacity,
-    wmSize,
-    wmColor,
-    wmRot,
+    op, mergeOut, splitMode, splitRange, splitEvery, compressQ,
+    rotAngle, rotAll, rotPages, wmText, wmPos, wmOpacity, wmSize, wmColor, wmRot,
   ]);
 
   const onShare = useCallback(async () => {
-    if (!syncUrl()) return;
-    const url = typeof window !== "undefined" ? window.location.href : "";
+    const hash = syncUrl();
+    if (!hash) {
+      setShareToast("Settings too long to share in a link.");
+      window.setTimeout(() => setShareToast(null), 3500);
+      return;
+    }
+    const url = window.location.href;
     try {
       await navigator.clipboard.writeText(url);
+      setShareToast("Link copied. Files are not included.");
     } catch {
-      /* */
+      setShareToast("Could not copy link. Copy the URL from your address bar.");
     }
-    setShareToast(true);
-    window.setTimeout(() => setShareToast(false), 3500);
+    window.setTimeout(() => setShareToast(null), 3500);
   }, [syncUrl]);
 
   const validationError = useMemo(() => {
@@ -247,19 +264,23 @@ export function PressWorkspace() {
       if (splitMode === "range") {
         if (!splitRange.trim()) return MSG.splitRangeInvalid;
         if (!isValidPageRangeSyntax(splitRange)) return MSG.splitRangeInvalid;
-        if (typeof pc === "number" && pc > 0 && pageRangeExceedsDocument(splitRange, pc))
+        if (pc === undefined) return "Loading page count…";
+        if (pc < 0) return "Could not read page count for this PDF.";
+        if (pageRangeExceedsDocument(splitRange, pc))
           return MSG.splitRangeExceeds(pc);
       } else {
         if (splitEvery < 1) return MSG.splitNInvalid;
-        if (typeof pc === "number" && pc > 0 && splitEvery >= pc)
-          return MSG.splitRangeExceeds(pc);
+        if (pc === undefined) return "Loading page count…";
+        if (pc < 0) return "Could not read page count for this PDF.";
+        if (splitEvery >= pc) return MSG.splitRangeExceeds(pc);
       }
     }
     if (op === "rotate" && !rotAll) {
       if (!rotPages.trim() || !isValidPageRangeSyntax(rotPages))
         return MSG.splitRangeInvalid;
-      const pc = valids[0]?.pageCount;
-      if (typeof pc === "number" && pc > 0 && pageRangeExceedsDocument(rotPages, pc))
+      if (pc === undefined) return "Loading page count…";
+      if (pc < 0) return "Could not read page count for this PDF.";
+      if (pageRangeExceedsDocument(rotPages, pc))
         return MSG.splitRangeExceeds(pc);
     }
     if (op === "watermark") {
@@ -270,12 +291,34 @@ export function PressWorkspace() {
   }, [valids, op, splitMode, splitRange, splitEvery, rotAll, rotPages, wmText]);
 
   const canRun =
-    badge === "ready" && validationError === null && outPhase !== "processing";
+    badge === "ready" &&
+    validationError === null &&
+    outPhase !== "processing";
 
-  const removeRow = (id: string) =>
-    setRows((prev) => prev.filter((r) => r.id !== id));
+  const selectOperation = (id: OperationId) => {
+    if (id === op) return;
+    resetOutput();
+    setOp(id);
+    if (id === "split" || id === "rotate" || id === "watermark") {
+      setRows((prev) => {
+        const val = prev.filter((r) => !r.error);
+        const err = prev.filter((r) => r.error);
+        if (val.length <= 1) return prev;
+        return [...err, val[0]];
+      });
+    }
+  };
 
-  const clearAll = () => setRows([]);
+  const tabDisabled = (id: OperationId) => {
+    if (id === "merge" || id === "compress") return false;
+    return valids.length !== 1;
+  };
+
+  const removeRow = (id: string) => setRows((prev) => prev.filter((r) => r.id !== id));
+  const clearAll = () => {
+    resetOutput();
+    setRows([]);
+  };
 
   const handleDragEnd = (e: DragEndEvent) => {
     if (op !== "merge" && op !== "compress") return;
@@ -287,8 +330,7 @@ export function PressWorkspace() {
       const oldIdx = val.findIndex((i) => i.id === active.id);
       const newIdx = val.findIndex((i) => i.id === over.id);
       if (oldIdx < 0 || newIdx < 0) return items;
-      const moved = arrayMove(val, oldIdx, newIdx);
-      return [...err, ...moved];
+      return [...err, ...arrayMove(val, oldIdx, newIdx)];
     });
   };
 
@@ -302,42 +344,11 @@ export function PressWorkspace() {
   };
 
   const stopProcessing = () => {
-    if (tickRef.current) clearInterval(tickRef.current);
-    tickRef.current = null;
-    setBadge("ready");
-  };
-
-  const selectOperation = (id: OperationId) => {
-    switch (id) {
-      case "merge":
-        setMergeOut("merged.pdf");
-        break;
-      case "split":
-        setSplitMode("range");
-        setSplitRange("");
-        setSplitEvery(1);
-        break;
-      case "compress":
-        setCompressQ("medium");
-        break;
-      case "rotate":
-        setRotAngle(90);
-        setRotAll(true);
-        setRotPages("");
-        break;
-      case "watermark":
-        setWmText("CONFIDENTIAL");
-        setWmPos("center");
-        setWmOpacity(30);
-        setWmSize(48);
-        setWmColor("#808080");
-        setWmRot(45);
-        break;
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
     }
-    setOp(id);
-    setOutPhase("idle");
-    setOutMsg("");
-    setPendingDownload(null);
+    setBadge("ready");
   };
 
   const onRun = async () => {
@@ -346,43 +357,36 @@ export function PressWorkspace() {
       setOutMsg(PRD.engineLoading);
       return;
     }
-    if (badge !== "ready") {
-      setOutPhase("error");
-      setOutMsg(PRD.engineRestarted);
-      return;
-    }
-    if (!canRun || validationError) return;
+    if (badge !== "ready" || !canRun || validationError) return;
+
+    const thisRun = ++runIdRef.current;
     const bridge = getWasmBridge();
     setPendingDownload(null);
     startProcessing();
+
     try {
       if (op === "merge") {
-        const buffers = await Promise.all(
-          valids.map((v) => readFileArrayBuffer(v.file)),
-        );
-        const res = await bridge.run(
-          "merge",
-          buffers.map((b) => b.slice(0)),
-          { configJson: JSON.stringify({ dividerPage: false }) },
-          { transfer: false },
-        );
+        const buffers = await Promise.all(valids.map((v) => readFileArrayBuffer(v.file)));
+        const res = await bridge.run("merge", buffers.map((b) => b.slice(0)), {
+          configJson: JSON.stringify({ dividerPage: false }),
+        }, { transfer: false });
+        if (thisRun !== runIdRef.current) return;
         if (!res.buffer) throw new PdfEngineError(PRD.genericWasm);
         const filename = sanitizeFilename(mergeOut || "merged.pdf");
-        const mb = (res.buffer.byteLength / (1024 * 1024)).toFixed(1);
         setPendingDownload({
           data: new Uint8Array(res.buffer),
           mime: "application/pdf",
           filename,
         });
         setOutPhase("success");
-        setOutMsg(`Merged ${valids.length} files · ${mb} MB`);
+        setOutMsg(`Merged ${valids.length} files · ${fmtSize(res.buffer.byteLength)}`);
       } else if (op === "split") {
         const buf = await readFileArrayBuffer(valids[0].file);
-        const cfg =
-          splitMode === "range"
-            ? JSON.stringify({ pages: splitRange.trim(), span: 0 })
-            : JSON.stringify({ span: splitEvery, pages: "" });
+        const cfg = splitMode === "range"
+          ? JSON.stringify({ pages: splitRange.trim(), span: 0 })
+          : JSON.stringify({ span: splitEvery, pages: "" });
         const res = await bridge.run("split", [buf], { configJson: cfg });
+        if (thisRun !== runIdRef.current) return;
         const parts = res.buffers || [];
         const meta = res.splitMeta || [];
         if (parts.length === 1) {
@@ -392,29 +396,20 @@ export function PressWorkspace() {
             filename: "split-1.pdf",
           });
         } else {
-          const entries = parts.map((b, i) => ({
+          const zip = buildZip(parts.map((b, i) => ({
             name: `split-${meta[i]?.from ?? i + 1}-${meta[i]?.thru ?? i + 1}.pdf`,
             data: new Uint8Array(b),
-          }));
-          const zip = buildZip(entries);
-          setPendingDownload({
-            data: zip,
-            mime: "application/zip",
-            filename: "split-output.zip",
-          });
+          })));
+          setPendingDownload({ data: zip, mime: "application/zip", filename: "split-output.zip" });
         }
         setOutPhase("success");
         setOutMsg(`Split into ${parts.length} file(s)`);
       } else if (op === "compress") {
-        const buffers = await Promise.all(
-          valids.map((v) => readFileArrayBuffer(v.file)),
-        );
-        const res = await bridge.run(
-          "optimize",
-          buffers.map((b) => b.slice(0)),
-          { quality: compressQ },
-          { transfer: false },
-        );
+        const buffers = await Promise.all(valids.map((v) => readFileArrayBuffer(v.file)));
+        const res = await bridge.run("optimize", buffers.map((b) => b.slice(0)), {
+          quality: compressQ,
+        }, { transfer: false });
+        if (thisRun !== runIdRef.current) return;
         const outs = res.buffers || [];
         if (outs.length === 1) {
           const orig = valids[0].file.size;
@@ -426,34 +421,24 @@ export function PressWorkspace() {
             filename: "compressed.pdf",
           });
           setOutPhase("success");
-          setOutMsg(
-            pct > 0
-              ? `Compressed to ${fmtSize(comp)} (${pct}% smaller than ${fmtSize(orig)})`
-              : `Compressed to ${fmtSize(comp)} (size unchanged)`,
-          );
+          setOutMsg(pct > 0
+            ? `Compressed to ${fmtSize(comp)} (${pct}% smaller)`
+            : `Compressed to ${fmtSize(comp)}`);
         } else {
-          const entries = outs.map((b, i) => ({
-            name: sanitizeFilename(
-              valids[i].file.name.replace(/\.pdf$/i, "") + "-compressed.pdf",
-            ),
+          const zip = buildZip(outs.map((b, i) => ({
+            name: sanitizeFilename(valids[i].file.name.replace(/\.pdf$/i, "") + "-compressed.pdf"),
             data: new Uint8Array(b),
-          }));
-          const zip = buildZip(entries);
-          setPendingDownload({
-            data: zip,
-            mime: "application/zip",
-            filename: "compressed.zip",
-          });
+          })));
+          setPendingDownload({ data: zip, mime: "application/zip", filename: "compressed.zip" });
           setOutPhase("success");
-          setOutMsg(`Compressed ${outs.length} files — download zip`);
+          setOutMsg(`Compressed ${outs.length} files`);
         }
       } else if (op === "rotate") {
         const buf = await readFileArrayBuffer(valids[0].file);
-        const cfg = JSON.stringify({
-          rotation: rotAngle,
-          pages: rotAll ? "" : rotPages.trim(),
+        const res = await bridge.run("rotate", [buf], {
+          configJson: JSON.stringify({ rotation: rotAngle, pages: rotAll ? "" : rotPages.trim() }),
         });
-        const res = await bridge.run("rotate", [buf], { configJson: cfg });
+        if (thisRun !== runIdRef.current) return;
         if (!res.buffer) throw new PdfEngineError(PRD.genericWasm);
         setPendingDownload({
           data: new Uint8Array(res.buffer),
@@ -464,16 +449,18 @@ export function PressWorkspace() {
         setOutMsg("Rotated PDF ready");
       } else if (op === "watermark") {
         const buf = await readFileArrayBuffer(valids[0].file);
-        const cfg = JSON.stringify({
-          text: wmText,
-          opacity: String(wmOpacity / 100),
-          rotation: String(wmRot),
-          onTop: true,
-          position: wmPos,
-          fontSize: wmSize,
-          color: wmColor,
+        const res = await bridge.run("watermark", [buf], {
+          configJson: JSON.stringify({
+            text: wmText,
+            opacity: String(wmOpacity / 100),
+            rotation: String(wmRot),
+            onTop: true,
+            position: wmPos,
+            fontSize: wmSize,
+            color: wmColor,
+          }),
         });
-        const res = await bridge.run("watermark", [buf], { configJson: cfg });
+        if (thisRun !== runIdRef.current) return;
         if (!res.buffer) throw new PdfEngineError(PRD.genericWasm);
         setPendingDownload({
           data: new Uint8Array(res.buffer),
@@ -482,86 +469,74 @@ export function PressWorkspace() {
         });
         setOutPhase("success");
         setOutMsg("Watermarked PDF ready");
+      } else {
+        throw new PdfEngineError("Unknown operation.");
       }
       stopProcessing();
     } catch (e) {
+      if (thisRun !== runIdRef.current) return;
       stopProcessing();
-      if (e instanceof PdfEngineError) {
-        if (e.code === "timeout") {
-          setOutPhase("timeout");
-          setOutMsg(PRD.timeout);
-        } else {
-          setOutPhase("error");
-          setOutMsg(e.message || PRD.genericWasm);
-        }
+      if (e instanceof PdfEngineError && e.code === "timeout") {
+        setOutPhase("timeout");
+        setOutMsg(PRD.timeout);
       } else {
         setOutPhase("error");
-        setOutMsg(PRD.genericWasm);
+        setOutMsg(e instanceof PdfEngineError ? e.message : PRD.genericWasm);
       }
     }
   };
 
-  const tabDisabled = (id: OperationId) => {
-    if (id !== "split" && id !== "rotate" && id !== "watermark") return false;
-    return valids.length !== 1;
-  };
+  const limitsHint = `PDF only · max ${fmtSize(MAX_FILE_BYTES)} per file · ${fmtSize(MAX_TOTAL_BYTES)} total`;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Press</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">
-            Browser-native PDF tools — powered by WebAssembly (pdfcpu)
-          </p>
-          <p className="text-sm text-emerald-700 dark:text-emerald-400 mt-3 max-w-xl">
-            Your files never leave your browser. All PDF processing happens
-            locally using WebAssembly. Nothing is uploaded to any server.
-          </p>
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <button
-            type="button"
-            onClick={onShare}
-            className="text-sm px-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800"
-          >
-            Share settings
-          </button>
-          {shareToast && (
-            <p className="text-xs text-gray-600 dark:text-gray-400 max-w-xs text-right">
-              Link copied. Note: your files are not included in the link.
-            </p>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div
+          className="rounded-full px-3 py-1 text-xs font-medium"
+          role="status"
+          aria-live="polite"
+        >
+          {badge === "loading" && (
+            <span className="text-neutral-500">Loading engine…</span>
           )}
-          <div
-            className={`text-xs px-2 py-1 rounded ${
-              badge === "ready"
-                ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
-                : badge === "processing"
-                  ? "bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200"
-                  : badge === "loading"
-                    ? "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
-                    : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
-            }`}
-          >
-            {badge === "loading" && "Loading engine…"}
-            {badge === "ready" && "Ready"}
-            {badge === "processing" && "Processing"}
-            {badge === "error" && (
-              <button
-                type="button"
-                className="underline"
-                onClick={async () => {
-                  setBadge("loading");
+          {badge === "ready" && (
+            <span className="bg-emerald-50 text-emerald-700">Ready</span>
+          )}
+          {badge === "processing" && (
+            <span className="bg-amber-50 text-amber-800">Processing…</span>
+          )}
+          {badge === "error" && (
+            <button
+              type="button"
+              className="text-red-600 underline"
+              onClick={async () => {
+                setBadge("loading");
+                try {
                   await getWasmBridge().recover();
                   setBadge("ready");
-                }}
-              >
-                Error — click to restart
-              </button>
-            )}
-          </div>
+                } catch {
+                  setBadge("error");
+                }
+              }}
+            >
+              Engine error — click to restart
+            </button>
+          )}
         </div>
+        <button
+          type="button"
+          onClick={() => void onShare()}
+          className="text-sm text-neutral-500 hover:text-neutral-900"
+        >
+          Share settings
+        </button>
       </div>
+
+      {shareToast && (
+        <p className="text-sm text-neutral-600" role="status" aria-live="polite">
+          {shareToast}
+        </p>
+      )}
 
       <DropZone
         items={rows}
@@ -569,12 +544,13 @@ export function PressWorkspace() {
         onItemsChange={(next) =>
           setRows(next.map((r) => ({ ...r, pageCount: undefined })))
         }
+        hint={limitsHint}
       />
 
       {rows.length > 0 && (
         <div className="space-y-2">
-          <div className="flex justify-between items-center">
-            <h2 className="text-lg font-semibold">Files</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-neutral-700">Files</h2>
             <button
               type="button"
               onClick={clearAll}
@@ -583,16 +559,12 @@ export function PressWorkspace() {
               Clear all
             </button>
           </div>
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext
               items={rows.filter((r) => !r.error).map((r) => r.id)}
               strategy={verticalListSortingStrategy}
             >
-              <ul className="space-y-2">
+              <ul className="space-y-1.5">
                 {rows.map((r) => (
                   <SortRow
                     key={r.id}
@@ -607,86 +579,73 @@ export function PressWorkspace() {
         </div>
       )}
 
-      <div>
-        <h2 className="text-lg font-semibold mb-2">Operation</h2>
-        <div className="flex flex-wrap gap-2">
-          {(
-            [
-              "merge",
-              "split",
-              "compress",
-              "rotate",
-              "watermark",
-            ] as OperationId[]
-          ).map((id) => (
+      <div role="tablist" aria-label="PDF operation" className="flex flex-wrap gap-2">
+        {OPS.map(({ id, label }) => {
+          const disabled = tabDisabled(id);
+          return (
             <button
               key={id}
               type="button"
-              title={tabDisabled(id) ? "Requires exactly 1 file" : undefined}
-              disabled={false}
+              role="tab"
+              aria-selected={op === id}
+              aria-disabled={disabled}
+              disabled={disabled}
+              title={disabled ? "Requires exactly 1 file" : undefined}
               onClick={() => selectOperation(id)}
-              className={`px-3 py-1.5 rounded-md text-sm capitalize border ${
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
                 op === id
-                  ? "border-blue-600 bg-blue-50 dark:bg-blue-950/50"
-                  : tabDisabled(id)
-                    ? "opacity-45 border-gray-200 dark:border-gray-700"
-                    : "border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800"
+                  ? "bg-neutral-900 text-white"
+                  : disabled
+                    ? "cursor-not-allowed bg-neutral-100 text-neutral-400"
+                    : "bg-neutral-100 text-neutral-700 hover:bg-neutral-200"
               }`}
             >
-              {id === "compress" ? "Compress" : id}
+              {label}
             </button>
-          ))}
-        </div>
+          );
+        })}
       </div>
 
-      <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-4 bg-white/50 dark:bg-gray-900/30">
+      <div className="rounded-xl border border-neutral-200 bg-neutral-50/50 p-5 space-y-4">
         {op === "merge" && (
-          <label className="block text-sm">
-            Output filename (optional)
+          <label className="block text-sm text-neutral-700">
+            Output filename
             <input
-              className="mt-1 w-full rounded border border-gray-300 dark:border-gray-600 px-2 py-1 bg-white dark:bg-gray-900"
+              className="mt-1.5 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm focus:border-neutral-400 focus:outline-none"
               value={mergeOut}
               onChange={(e) => setMergeOut(e.target.value)}
             />
           </label>
         )}
+
         {op === "split" && (
-          <div className="space-y-3">
-            <div className="flex gap-4 text-sm">
+          <div className="space-y-3 text-sm">
+            <div className="flex gap-4">
               <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  checked={splitMode === "range"}
-                  onChange={() => setSplitMode("range")}
-                />
+                <input type="radio" checked={splitMode === "range"} onChange={() => setSplitMode("range")} />
                 By page range
               </label>
               <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  checked={splitMode === "every"}
-                  onChange={() => setSplitMode("every")}
-                />
+                <input type="radio" checked={splitMode === "every"} onChange={() => setSplitMode("every")} />
                 Every N pages
               </label>
             </div>
-
             {splitMode === "range" ? (
               <input
-                className="w-full rounded border border-gray-300 dark:border-gray-600 px-2 py-1"
+                aria-label="Page range"
+                className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2"
                 placeholder="1-3, 5, 7-9"
                 value={splitRange}
                 onChange={(e) => setSplitRange(e.target.value)}
               />
             ) : (
               <input
+                aria-label="Pages per split"
                 type="number"
                 min={1}
-                className="w-32 rounded border border-gray-300 dark:border-gray-600 px-2 py-1"
+                className="w-32 rounded-lg border border-neutral-300 bg-white px-3 py-2"
                 value={splitEvery}
-                onChange={(e) =>
-                  setSplitEvery(parseInt(e.target.value || "1", 10))
-                }
+                onChange={(e) => setSplitEvery(parseInt(e.target.value || "1", 10))}
               />
             )}
           </div>
@@ -696,12 +655,7 @@ export function PressWorkspace() {
           <div className="flex gap-4 text-sm">
             {(["low", "medium", "high"] as const).map((q) => (
               <label key={q} className="flex items-center gap-2 capitalize">
-                <input
-                  type="radio"
-                  checked={compressQ === q}
-                  onChange={() => setCompressQ(q)}
-                />
-
+                <input type="radio" checked={compressQ === q} onChange={() => setCompressQ(q)} />
                 {q}
               </label>
             ))}
@@ -713,29 +667,20 @@ export function PressWorkspace() {
             <div className="flex gap-3">
               {([90, 180, 270] as const).map((a) => (
                 <label key={a} className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    checked={rotAngle === a}
-                    onChange={() => setRotAngle(a)}
-                  />
+                  <input type="radio" checked={rotAngle === a} onChange={() => setRotAngle(a)} />
                   {a}°
                 </label>
               ))}
             </div>
-
             <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={rotAll}
-                onChange={(e) => setRotAll(e.target.checked)}
-              />
+              <input type="checkbox" checked={rotAll} onChange={(e) => setRotAll(e.target.checked)} />
               All pages
             </label>
-
             {!rotAll && (
               <input
-                className="w-full rounded border border-gray-300 dark:border-gray-600 px-2 py-1"
-                placeholder="Page range: 1-2, 4"
+                aria-label="Page range to rotate"
+                className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2"
+                placeholder="1-2, 4"
                 value={rotPages}
                 onChange={(e) => setRotPages(e.target.value)}
               />
@@ -745,135 +690,92 @@ export function PressWorkspace() {
 
         {op === "watermark" && (
           <div className="space-y-3 text-sm">
-            <input
-              className="w-full rounded border border-gray-300 dark:border-gray-600 px-2 py-1"
-              value={wmText}
-              maxLength={200}
-              onChange={(e) => setWmText(e.target.value)}
-            />
-
+            <label className="block">
+              Watermark text
+              <input
+                className="mt-1.5 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2"
+                value={wmText}
+                maxLength={200}
+                onChange={(e) => setWmText(e.target.value)}
+              />
+            </label>
             <label className="block">
               Position
               <select
-                className="mt-1 w-full rounded border border-gray-300 dark:border-gray-600 px-2 py-1"
+                className="mt-1.5 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2"
                 value={wmPos}
                 onChange={(e) => setWmPos(e.target.value as typeof wmPos)}
               >
-                <option value="center">centre</option>
-
-                <option value="top-left">top-left</option>
-
-                <option value="top-right">top-right</option>
-
-                <option value="bottom-left">bottom-left</option>
-
-                <option value="bottom-right">bottom-right</option>
+                <option value="center">Centre</option>
+                <option value="top-left">Top left</option>
+                <option value="top-right">Top right</option>
+                <option value="bottom-left">Bottom left</option>
+                <option value="bottom-right">Bottom right</option>
               </select>
             </label>
-
             <label className="block">
               Opacity {wmOpacity}%
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={wmOpacity}
-                onChange={(e) => setWmOpacity(parseInt(e.target.value, 10))}
-                className="w-full"
-              />
+              <input type="range" min={0} max={100} value={wmOpacity}
+                onChange={(e) => setWmOpacity(parseInt(e.target.value, 10))} className="w-full" />
             </label>
-
             <label className="block">
               Font size {wmSize} pt
-              <input
-                type="range"
-                min={12}
-                max={120}
-                value={wmSize}
-                onChange={(e) => setWmSize(parseInt(e.target.value, 10))}
-                className="w-full"
-              />
+              <input type="range" min={12} max={120} value={wmSize}
+                onChange={(e) => setWmSize(parseInt(e.target.value, 10))} className="w-full" />
             </label>
-
             <label className="block">
               Colour
-              <input
-                type="color"
-                value={wmColor}
-                onChange={(e) => setWmColor(e.target.value)}
-                className="mt-1 h-8 w-full rounded border border-gray-300"
-              />
+              <input type="color" value={wmColor} onChange={(e) => setWmColor(e.target.value)}
+                className="mt-1.5 h-9 w-full rounded border border-neutral-300" />
             </label>
-
             <label className="block">
               Text rotation {wmRot}°
-              <input
-                type="range"
-                min={0}
-                max={90}
-                value={wmRot}
-                onChange={(e) => setWmRot(parseInt(e.target.value, 10))}
-                className="w-full"
-              />
+              <input type="range" min={0} max={90} value={wmRot}
+                onChange={(e) => setWmRot(parseInt(e.target.value, 10))} className="w-full" />
             </label>
           </div>
         )}
 
         {validationError && (
-          <p className="text-sm text-amber-700 dark:text-amber-300">
-            {validationError}
-          </p>
+          <p className="text-sm text-amber-700" role="alert">{validationError}</p>
         )}
 
         <button
           type="button"
           disabled={!canRun}
           onClick={() => void onRun()}
-          className="w-full py-2.5 rounded-lg bg-blue-600 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+          className="w-full rounded-lg bg-neutral-900 py-3 text-sm font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Run
+          {op === "merge" ? "Merge PDFs" :
+           op === "split" ? "Split PDF" :
+           op === "compress" ? "Compress PDF" :
+           op === "rotate" ? "Rotate PDF" : "Add watermark"}
         </button>
       </div>
 
-      <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 min-h-[120px] bg-gray-50/80 dark:bg-gray-900/50">
+      <div
+        className="rounded-xl border border-neutral-200 bg-white p-5 min-h-[100px]"
+        aria-live="polite"
+      >
         {outPhase === "idle" && (
-          <p className="text-sm text-gray-500">
-            Configure an operation and click Run
-          </p>
+          <p className="text-sm text-neutral-400">Results will appear here</p>
         )}
-
         {outPhase === "processing" && (
-          <div className="flex items-center gap-3">
-            <span className="inline-block h-4 w-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-
-            <span>Processing… {elapsed}s</span>
+          <div className="flex items-center gap-3 text-sm text-neutral-600">
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-neutral-400 border-t-transparent" />
+            Processing… {elapsed}s
           </div>
         )}
-
-        {(outPhase === "success" ||
-          outPhase === "error" ||
-          outPhase === "timeout") && (
+        {(outPhase === "success" || outPhase === "error" || outPhase === "timeout") && (
           <div className="space-y-3">
-            <p
-              className={`text-sm ${
-                outPhase === "success"
-                  ? "text-green-800 dark:text-green-300"
-                  : "text-red-700 dark:text-red-300"
-              }`}
-            >
+            <p className={`text-sm ${outPhase === "success" ? "text-emerald-700" : "text-red-600"}`}>
               {outMsg}
             </p>
             {outPhase === "success" && pendingDownload && (
               <button
                 type="button"
-                className="px-4 py-2 rounded-lg bg-green-700 text-white text-sm font-medium hover:bg-green-800"
-                onClick={() => {
-                  triggerDownload(
-                    pendingDownload.data,
-                    pendingDownload.mime,
-                    pendingDownload.filename,
-                  );
-                }}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+                onClick={() => triggerDownload(pendingDownload.data, pendingDownload.mime, pendingDownload.filename)}
               >
                 Download {pendingDownload.filename}
               </button>
@@ -887,84 +789,36 @@ export function PressWorkspace() {
 
 function SortRow({
   row,
-
   canDrag,
-
   onRemove,
 }: {
   row: QueueRow;
-
   canDrag: boolean;
-
   onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition } =
     useSortable({ id: row.id, disabled: !canDrag || !!row.error });
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-
-    transition,
-  };
-
   return (
     <li
       ref={setNodeRef}
-      style={style}
-      className={`flex items-center gap-2 rounded border px-3 py-2 text-sm ${
-        row.error
-          ? "border-red-300 bg-red-50 dark:bg-red-950/30"
-          : "border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
+        row.error ? "border-red-200 bg-red-50" : "border-neutral-200 bg-white"
       }`}
     >
       {canDrag && !row.error && (
-        <button
-          type="button"
-          className="cursor-grab text-gray-400"
-          {...attributes}
-          {...listeners}
-          aria-label="Drag to reorder"
-        >
-          ⋮⋮
-        </button>
+        <button type="button" className="cursor-grab text-neutral-400" {...attributes} {...listeners}
+          aria-label={`Drag to reorder ${row.file.name}`}>⋮⋮</button>
       )}
-
-      <span className="flex-1 truncate" title={row.file.name}>
-        {truncName(row.file.name)}
+      <span className="flex-1 truncate" title={row.file.name}>{truncName(row.file.name)}</span>
+      <span className="text-neutral-400">{fmtSize(row.file.size)}</span>
+      <span className="w-12 text-right tabular-nums text-neutral-400">
+        {row.error ? "—" : row.pageCount === undefined ? "…" : row.pageCount < 0 ? "—" : row.pageCount}
       </span>
-
-      <span className="text-gray-500">{fmtSize(row.file.size)}</span>
-
-      <span className="text-gray-500 w-16 text-right tabular-nums">
-        {row.error
-          ? "—"
-          : row.pageCount === undefined
-            ? "…"
-            : row.pageCount < 0
-              ? "—"
-              : row.pageCount}
-      </span>
-
-      {row.warn && !row.error && (
-        <span className="text-xs text-amber-600 max-w-[140px] truncate" title={MSG.largeWarn}>
-          {MSG.largeWarn}
-        </span>
-      )}
-
-      {row.error && (
-        <span className="text-xs text-red-600 max-w-[200px] truncate">
-          {row.error}
-        </span>
-      )}
-
-      <button
-        type="button"
-        onClick={onRemove}
-        className="text-red-500 hover:text-red-700 px-1"
-        aria-label="Remove"
-      >
-        ×
-      </button>
+      {row.error && <span className="max-w-[160px] truncate text-xs text-red-600">{row.error}</span>}
+      <button type="button" onClick={onRemove} className="text-neutral-400 hover:text-red-600"
+        aria-label={`Remove ${row.file.name}`}>×</button>
     </li>
   );
 }

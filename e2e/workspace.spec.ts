@@ -9,10 +9,6 @@ const twoPage = path.join(fixtures, "two-page.pdf");
 
 const fileInput = 'input[type="file"]';
 
-test.beforeAll(() => {
-  // Fixtures are committed; gen script is optional for regeneration.
-});
-
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await waitForEngineReady(page);
@@ -29,7 +25,7 @@ test("rejects non-PDF upload", async ({ page }) => {
 
 test("merge two PDFs shows success and download", async ({ page }) => {
   await uploadPdf(page, fileInput, [onePage, onePageB]);
-  await page.getByRole("button", { name: "Run" }).click();
+  await page.getByRole("button", { name: "Merge PDFs" }).click();
   await expect(
     page.getByRole("button", { name: /Download merged\.pdf/i }),
   ).toBeVisible({ timeout: 120_000 });
@@ -38,18 +34,27 @@ test("merge two PDFs shows success and download", async ({ page }) => {
 
 test("split by page range", async ({ page }) => {
   await uploadPdf(page, fileInput, [twoPage]);
-  await page.getByRole("button", { name: "Split" }).click();
+  await page.getByRole("tab", { name: "Split" }).click();
   await page.getByPlaceholder("1-3, 5, 7-9").fill("1");
-  await page.getByRole("button", { name: "Run" }).click();
+  await page.getByRole("button", { name: "Split PDF" }).click();
   await expect(
     page.getByRole("button", { name: /Download split/i }),
   ).toBeVisible({ timeout: 120_000 });
 });
 
+test("compress PDF", async ({ page }) => {
+  await uploadPdf(page, fileInput, [onePage]);
+  await page.getByRole("tab", { name: "Compress" }).click();
+  await page.getByRole("button", { name: "Compress PDF" }).click();
+  await expect(
+    page.getByRole("button", { name: /Download compressed\.pdf/i }),
+  ).toBeVisible({ timeout: 120_000 });
+});
+
 test("rotate PDF", async ({ page }) => {
   await uploadPdf(page, fileInput, [onePage]);
-  await page.getByRole("button", { name: "Rotate" }).click();
-  await page.getByRole("button", { name: "Run" }).click();
+  await page.getByRole("tab", { name: "Rotate" }).click();
+  await page.getByRole("button", { name: "Rotate PDF" }).click();
   await expect(
     page.getByRole("button", { name: /Download rotated\.pdf/i }),
   ).toBeVisible({ timeout: 120_000 });
@@ -57,8 +62,8 @@ test("rotate PDF", async ({ page }) => {
 
 test("watermark PDF", async ({ page }) => {
   await uploadPdf(page, fileInput, [onePage]);
-  await page.getByRole("button", { name: "Watermark" }).click();
-  await page.getByRole("button", { name: "Run" }).click();
+  await page.getByRole("tab", { name: "Watermark" }).click();
+  await page.getByRole("button", { name: "Add watermark" }).click();
   await expect(
     page.getByRole("button", { name: /Download watermarked\.pdf/i }),
   ).toBeVisible({ timeout: 120_000 });
@@ -69,12 +74,12 @@ test("merge requires at least two files", async ({ page }) => {
   await expect(
     page.getByText("Select at least 2 files to merge."),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Run" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Merge PDFs" })).toBeDisabled();
 });
 
 test("invalid page range shows PRD message", async ({ page }) => {
   await uploadPdf(page, fileInput, [onePage]);
-  await page.getByRole("button", { name: "Split" }).click();
+  await page.getByRole("tab", { name: "Split" }).click();
   await page.getByPlaceholder("1-3, 5, 7-9").fill("abc");
   await expect(
     page.getByText("Invalid page range. Use formats like 1-3, 5, 7-9."),

@@ -12,6 +12,9 @@ describe("pageRange", () => {
   it("rejects garbage", () => {
     expect(isValidPageRangeSyntax("abc")).toBe(false);
     expect(isValidPageRangeSyntax("")).toBe(false);
+    expect(isValidPageRangeSyntax("0")).toBe(false);
+    expect(isValidPageRangeSyntax("-3")).toBe(false);
+    expect(isValidPageRangeSyntax("9-1")).toBe(false);
   });
 
   it("detects page range overflow", () => {

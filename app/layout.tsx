@@ -1,22 +1,25 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
+import { SiteHeader } from "@/components/SiteHeader";
+import { SeoBar } from "@/components/SeoBar";
 import { SiteFooter } from "@/components/SiteFooter";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
   subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+  variable: "--font-inter",
 });
 
 export const metadata: Metadata = {
   title: "Press — PDF tools in your browser",
   description:
-    "Merge, split, compress, rotate, and watermark PDFs locally with WebAssembly.",
+    "Merge, split, compress, rotate, and watermark PDFs locally in your browser. No uploads, no account — powered by WebAssembly.",
+  openGraph: {
+    title: "Press — PDF tools in your browser",
+    description:
+      "Merge, split, compress, rotate, and watermark PDFs locally in your browser.",
+    type: "website",
+  },
 };
 
 export default function RootLayout({
@@ -25,12 +28,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">
-        {children}
+    <html lang="en" className={`${inter.variable} h-full`}>
+      <body className="flex min-h-full flex-col bg-white font-sans text-neutral-900 antialiased">
+        <SiteHeader />
+        <SeoBar />
+        <main className="flex-1">{children}</main>
         <SiteFooter />
       </body>
     </html>
