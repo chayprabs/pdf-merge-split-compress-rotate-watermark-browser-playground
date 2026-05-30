@@ -1,3 +1,5 @@
+import type { ValidationResult } from "./engineTypes";
+
 export const WORKER_OP_TIMEOUT_MS = 60_000;
 
 export const PRD = {
@@ -5,8 +7,10 @@ export const PRD = {
   engineLoading: "Engine is still loading. Please wait.",
   engineRestarted:
     "An unexpected error occurred. The engine has been restarted.",
+  passwordProtected:
+    "This PDF is password-protected and cannot be processed.",
   genericWasm:
-    "Could not process the file. It may be corrupted or password-protected.",
+    "Could not process the file. It may be corrupted or invalid.",
 } as const;
 
 export class PdfEngineError extends Error {
@@ -45,6 +49,7 @@ export interface RunResult {
 
 interface WorkerInitOk {
   type: "ready";
+  engineVersion?: string;
 }
 
 interface WorkerInitErr {
@@ -75,7 +80,11 @@ function mapEngineError(raw: string): string {
   if (
     s.includes("password") ||
     s.includes("encrypt") ||
-    s.includes("decrypt") ||
+    s.includes("decrypt")
+  ) {
+    return PRD.passwordProtected;
+  }
+  if (
     s.includes("corrupt") ||
     s.includes("validation failed") ||
     s.includes("invalid page")
@@ -100,9 +109,9 @@ export function getWasmBridge(): WasmBridge {
 }
 
 export class WasmBridge {
-  readonly engineVersion = "0.11.1";
   private worker: Worker | null = null;
   private readyPromise: Promise<void> | null = null;
+  engineVersion: string | null = null;
   private nextId = 1;
   private opChain: Promise<unknown> = Promise.resolve();
   private readonly pending = new Map<
@@ -149,6 +158,7 @@ export class WasmBridge {
       this.pending.clear();
       this.worker = null;
       this.readyPromise = null;
+      this.engineVersion = null;
     };
     return w;
   }
@@ -172,6 +182,7 @@ export class WasmBridge {
           const msg = ev.data;
           if (msg.type === "ready") {
             w.removeEventListener("message", onMsg);
+            this.engineVersion = msg.engineVersion ?? null;
             resolve();
             return;
           }
@@ -200,6 +211,7 @@ export class WasmBridge {
     }
     this.worker = null;
     this.readyPromise = null;
+    this.engineVersion = null;
     await this.ensureReady();
   }
 
@@ -223,6 +235,7 @@ export class WasmBridge {
         }
         this.worker = null;
         this.readyPromise = null;
+        this.engineVersion = null;
         void this.restartWorker();
         reject(new PdfEngineError(PRD.timeout, "timeout"));
       }, WORKER_OP_TIMEOUT_MS);
@@ -273,6 +286,10 @@ export class WasmBridge {
   async recover(): Promise<void> {
     await this.restartWorker();
   }
+
+  getEngineVersion(): string | null {
+    return this.engineVersion;
+  }
 }
 
 export async function pageCountPdf(buffer: ArrayBuffer): Promise<number> {
@@ -287,15 +304,16 @@ export async function pageCountPdf(buffer: ArrayBuffer): Promise<number> {
 
 export async function validatePdfBuffer(
   buffer: ArrayBuffer,
-): Promise<{ valid: boolean; error?: string }> {
+): Promise<ValidationResult> {
+  const br = getWasmBridge();
+  const buf = buffer.slice(0);
   try {
-    const br = getWasmBridge();
-    const buf = buffer.slice(0);
     await br.run("validate", [buf], {}, { transfer: false });
     return { valid: true };
   } catch (e) {
-    const error =
-      e instanceof PdfEngineError ? e.message : PRD.genericWasm;
-    return { valid: false, error };
+    if (e instanceof PdfEngineError) {
+      return { valid: false, error: e.message };
+    }
+    return { valid: false, error: PRD.genericWasm };
   }
 }

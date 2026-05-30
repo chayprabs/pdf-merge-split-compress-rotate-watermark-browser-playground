@@ -72,13 +72,6 @@ function runOp(payload) {
     return { type: "done", id, ok: true, pageCount: Number(r.data) };
   }
 
-  if (op === "validate") {
-    const pdf = new Uint8Array(files[0]);
-    const r = self.pdfcpuValidate(pdf);
-    if (!r.ok) throw new Error(r.error || "validate failed");
-    return { type: "done", id, ok: true };
-  }
-
   if (op === "merge") {
     const arr = files.map((b) => new Uint8Array(b));
     const cfg = options?.configJson ?? "";
@@ -102,25 +95,6 @@ function runOp(payload) {
       buffers.push(b64ToArrayBuffer(p.data));
     }
     return { type: "done", id, ok: true, buffers, splitMeta };
-  }
-  if (op === "extractPages") {
-    const pdf = new Uint8Array(files[0]);
-    const cfg = options?.configJson ?? "";
-    const r = self.pdfcpuExtractPages(pdf, cfg);
-    if (!r.ok) throw new Error(r.error || "extractPages failed");
-    const buffer = copyWasmBytes(r.data);
-    if (!buffer) throw new Error("empty extractPages result");
-    return { type: "done", id, ok: true, buffer };
-  }
-
-  if (op === "removePages") {
-    const pdf = new Uint8Array(files[0]);
-    const cfg = options?.configJson ?? "";
-    const r = self.pdfcpuRemovePages(pdf, cfg);
-    if (!r.ok) throw new Error(r.error || "removePages failed");
-    const buffer = copyWasmBytes(r.data);
-    if (!buffer) throw new Error("empty removePages result");
-    return { type: "done", id, ok: true, buffer };
   }
 
   if (op === "optimize") {
@@ -156,6 +130,32 @@ function runOp(payload) {
     return { type: "done", id, ok: true, buffer };
   }
 
+  if (op === "validate") {
+    const pdf = new Uint8Array(files[0]);
+    const r = self.pdfcpuValidate(pdf);
+    if (!r.ok) throw new Error(r.error || "validate failed");
+    return { type: "done", id, ok: true, valid: true };
+  }
+
+  if (op === "extractPages") {
+    const pdf = new Uint8Array(files[0]);
+    const cfg = options?.configJson ?? "";
+    const r = self.pdfcpuExtractPages(pdf, cfg);
+    if (!r.ok) throw new Error(r.error || "extractPages failed");
+    const buffer = copyWasmBytes(r.data);
+    if (!buffer) throw new Error("empty extractPages result");
+    return { type: "done", id, ok: true, buffer };
+  }
+
+  if (op === "removePages") {
+    const pdf = new Uint8Array(files[0]);
+    const cfg = options?.configJson ?? "";
+    const r = self.pdfcpuRemovePages(pdf, cfg);
+    if (!r.ok) throw new Error(r.error || "removePages failed");
+    const buffer = copyWasmBytes(r.data);
+    if (!buffer) throw new Error("empty removePages result");
+    return { type: "done", id, ok: true, buffer };
+  }
 
   if (op === "setMetadata") {
     const pdf = new Uint8Array(files[0]);
@@ -199,7 +199,13 @@ self.onmessage = (ev) => {
     wasmReady = false;
     loadPromise = null;
     loadWasm()
-      .then(() => self.postMessage({ type: "ready" }))
+      .then(() => {
+        const engineVersion =
+          typeof self.pdfcpuVersion?.version === "string"
+            ? self.pdfcpuVersion.version
+            : "unknown";
+        self.postMessage({ type: "ready", engineVersion });
+      })
       .catch((e) => {
         self.postMessage({
           type: "initError",
