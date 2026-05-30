@@ -1,17 +1,19 @@
 # Press
 
-Browser-based PDF workspace: **merge**, **split**, **compress**, **rotate**, and **watermark** — fully client-side using [pdfcpu](https://github.com/pdfcpu/pdfcpu) compiled to WebAssembly. No file data is sent to a server.
+Browser-based PDF workspace — fully client-side using [pdfcpu](https://github.com/pdfcpu/pdfcpu) compiled to WebAssembly. No file data is sent to a server.
 
-**Live:** Deploy the static `out/` folder to Cloudflare Pages or any static host with COOP/COEP headers (see [`public/_headers`](public/_headers)).
+## Tools (6 operations)
 
-## Features
+| Tool | What it does |
+|------|----------------|
+| **Merge** | Combine 2–20 PDFs in order; optional blank divider pages between documents |
+| **Split** | Split into multiple files by range, every N pages, extract pages to one PDF, or remove pages |
+| **Compress** | Optimize PDF structure (low / medium / high quality); batch up to 10 files |
+| **Rotate** | Rotate 90°, 180°, or 270° on all pages or a page range |
+| **Watermark** | Add text watermark with position, opacity, size, colour, rotation, page range, and layer (on top or behind) |
+| **Metadata** | Set PDF title, author, subject, keywords, and creator |
 
-- Merge up to 20 PDFs with drag-to-reorder
-- Split by page range or every N pages
-- Compress with low / medium / high quality
-- Rotate 90°, 180°, or 270° (all pages or a range)
-- Text watermark with position, opacity, size, colour, and rotation
-- Share operation settings via URL hash (files never included)
+All tools support custom output filenames and auto-download on success.
 
 ## Requirements
 
@@ -21,16 +23,14 @@ Browser-based PDF workspace: **merge**, **split**, **compress**, **rotate**, and
 ## Develop
 
 ```bash
-# Build WASM + copy wasm_exec.js from the same Go toolchain
 bash scripts/build-wasm.sh
-
 npm install
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-> **Note:** WASM artifacts (`public/engine-pdfcpu.wasm`, `public/wasm_exec.js`) are gitignored and must be built before dev or production build.
+WASM artifacts (`public/engine-pdfcpu.wasm`, `public/wasm_exec.js`) are gitignored — run `build-wasm.sh` before dev or production build.
 
 ## Production static build
 
@@ -40,13 +40,13 @@ npm ci
 npm run build
 ```
 
-Output: `out/`. Test locally with correct COOP/COEP + MIME types:
+Output: `out/`. Test locally:
 
 ```bash
 npm run serve:static
 ```
 
-Then open [http://localhost:3001](http://localhost:3001).
+Open [http://localhost:3001](http://localhost:3001).
 
 ## Deploy (Cloudflare Pages)
 
@@ -54,9 +54,9 @@ Then open [http://localhost:3001](http://localhost:3001).
 |---------|-------|
 | Build command | `bash scripts/build-wasm.sh && npm ci && npm run build` |
 | Output directory | `out` |
-| Go version | 1.24 (install via build environment) |
+| Go version | 1.24 |
 
-Copy [`public/_headers`](public/_headers) rules to your host. WASM must be served as `application/wasm`.
+Use [`public/_headers`](public/_headers) for COOP/COEP headers required by WebAssembly.
 
 ## Tests
 
@@ -65,19 +65,11 @@ npm test              # Vitest (unit)
 npm run test:e2e      # Playwright (needs `out/` from `npm run build`)
 ```
 
-## Security headers
+## Limits
 
-With `output: 'export'`, Next.js does not emit custom `headers()`. Use [`public/_headers`](public/_headers) on **Cloudflare Pages** (or your host's equivalent). Local `serve-static` applies the same policies for smoke testing.
-
-## Limitations
-
+- PDF only; max 200 MB per file, 500 MB total per session
 - Password-protected PDFs are not supported
-- Maximum 200 MB per file, 500 MB total per session
 - Compress uses pdfcpu optimize (structure cleanup), not image recompression
-
-## CI
-
-GitHub Actions builds WASM, runs TypeScript check, ESLint, license-checker, `npm audit`, unit tests, `next build`, and Playwright against `out/`.
 
 ## Legal
 

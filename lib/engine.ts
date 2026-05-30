@@ -4,6 +4,7 @@ export {
   PdfEngineError,
   PRD,
   pageCountPdf,
+  validatePdfBuffer,
   WORKER_OP_TIMEOUT_MS,
 } from "./wasmBridge";
 

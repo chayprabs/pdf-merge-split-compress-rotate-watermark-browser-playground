@@ -20,6 +20,8 @@ export const MSG = {
   wmOne: "Select exactly 1 file to watermark.",
   wmEmpty: "Enter watermark text.",
   wmLong: "Watermark text must be 200 characters or fewer.",
+  metadataOne: "Select exactly 1 file to edit metadata.",
+  metadataEmpty: "Enter at least one metadata field.",
   largeWarn: "Large file — processing may be slow",
 } as const;
 

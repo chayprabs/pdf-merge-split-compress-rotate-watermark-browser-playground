@@ -21,11 +21,15 @@ export class PdfEngineError extends Error {
 
 export type WorkerOp =
   | "pageCount"
+  | "validate"
   | "merge"
   | "split"
+  | "extractPages"
+  | "removePages"
   | "optimize"
   | "rotate"
-  | "watermark";
+  | "watermark"
+  | "setMetadata";
 
 export interface SplitPartMeta {
   from: number;
@@ -96,6 +100,7 @@ export function getWasmBridge(): WasmBridge {
 }
 
 export class WasmBridge {
+  readonly engineVersion = "0.11.1";
   private worker: Worker | null = null;
   private readyPromise: Promise<void> | null = null;
   private nextId = 1;
@@ -278,4 +283,19 @@ export async function pageCountPdf(buffer: ArrayBuffer): Promise<number> {
     throw new PdfEngineError(PRD.genericWasm);
   }
   return out.pageCount;
+}
+
+export async function validatePdfBuffer(
+  buffer: ArrayBuffer,
+): Promise<{ valid: boolean; error?: string }> {
+  try {
+    const br = getWasmBridge();
+    const buf = buffer.slice(0);
+    await br.run("validate", [buf], {}, { transfer: false });
+    return { valid: true };
+  } catch (e) {
+    const error =
+      e instanceof PdfEngineError ? e.message : PRD.genericWasm;
+    return { valid: false, error };
+  }
 }

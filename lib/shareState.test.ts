@@ -20,6 +20,15 @@ describe("shareState", () => {
     });
     expect(s?.wmOpacityPct).toBe(100);
     expect(s?.wmFontSize).toBe(12);
-    expect(s?.wmRotation).toBe(90);
+    expect(s?.wmRotation).toBe(200);
+  });
+
+  it("validateShareableState accepts metadata operation", () => {
+    const s = validateShareableState({
+      operation: "metadata",
+      metaTitle: "Hello",
+    });
+    expect(s?.operation).toBe("metadata");
+    expect(s?.metaTitle).toBe("Hello");
   });
 });

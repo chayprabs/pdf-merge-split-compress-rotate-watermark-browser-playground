@@ -72,6 +72,13 @@ function runOp(payload) {
     return { type: "done", id, ok: true, pageCount: Number(r.data) };
   }
 
+  if (op === "validate") {
+    const pdf = new Uint8Array(files[0]);
+    const r = self.pdfcpuValidate(pdf);
+    if (!r.ok) throw new Error(r.error || "validate failed");
+    return { type: "done", id, ok: true };
+  }
+
   if (op === "merge") {
     const arr = files.map((b) => new Uint8Array(b));
     const cfg = options?.configJson ?? "";
@@ -95,6 +102,25 @@ function runOp(payload) {
       buffers.push(b64ToArrayBuffer(p.data));
     }
     return { type: "done", id, ok: true, buffers, splitMeta };
+  }
+  if (op === "extractPages") {
+    const pdf = new Uint8Array(files[0]);
+    const cfg = options?.configJson ?? "";
+    const r = self.pdfcpuExtractPages(pdf, cfg);
+    if (!r.ok) throw new Error(r.error || "extractPages failed");
+    const buffer = copyWasmBytes(r.data);
+    if (!buffer) throw new Error("empty extractPages result");
+    return { type: "done", id, ok: true, buffer };
+  }
+
+  if (op === "removePages") {
+    const pdf = new Uint8Array(files[0]);
+    const cfg = options?.configJson ?? "";
+    const r = self.pdfcpuRemovePages(pdf, cfg);
+    if (!r.ok) throw new Error(r.error || "removePages failed");
+    const buffer = copyWasmBytes(r.data);
+    if (!buffer) throw new Error("empty removePages result");
+    return { type: "done", id, ok: true, buffer };
   }
 
   if (op === "optimize") {
@@ -127,6 +153,17 @@ function runOp(payload) {
     if (!r.ok) throw new Error(r.error || "watermark failed");
     const buffer = copyWasmBytes(r.data);
     if (!buffer) throw new Error("empty watermark result");
+    return { type: "done", id, ok: true, buffer };
+  }
+
+
+  if (op === "setMetadata") {
+    const pdf = new Uint8Array(files[0]);
+    const cfg = options?.configJson ?? "";
+    const r = self.pdfcpuSetMetadata(pdf, cfg);
+    if (!r.ok) throw new Error(r.error || "setMetadata failed");
+    const buffer = copyWasmBytes(r.data);
+    if (!buffer) throw new Error("empty setMetadata result");
     return { type: "done", id, ok: true, buffer };
   }
 
