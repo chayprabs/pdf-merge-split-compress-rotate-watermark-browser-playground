@@ -13,11 +13,11 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "Press — PDF tools in your browser",
   description:
-    "Merge, split, compress, rotate, and watermark PDFs locally in your browser. No uploads, no account — powered by WebAssembly.",
+    "Merge, split, compress, rotate, watermark, and edit PDF metadata locally in your browser. No uploads, no account — powered by WebAssembly.",
   openGraph: {
     title: "Press — PDF tools in your browser",
     description:
-      "Merge, split, compress, rotate, and watermark PDFs locally in your browser.",
+      "Merge, split, compress, rotate, watermark, and edit PDF metadata locally in your browser.",
     type: "website",
   },
 };

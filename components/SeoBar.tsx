@@ -6,7 +6,7 @@ export function SeoBar() {
     >
       <div className="mx-auto max-w-5xl px-4 py-3 text-center text-sm leading-relaxed text-neutral-600">
         <p>
-          Merge, split, compress, rotate, and watermark PDF files entirely in
+          Merge, split, compress, rotate, watermark, and edit PDF metadata entirely in
           your browser — no uploads, no account, no waiting.
         </p>
         <p className="mt-0.5">
